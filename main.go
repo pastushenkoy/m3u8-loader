@@ -15,6 +15,8 @@ import (
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
+const workersCount = 10
+
 func main() {
 	defaultStr := ""
 
@@ -40,20 +42,20 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	files, err := DownloadSegments(mediapl, dir)
+	err = DownloadSegments(mediapl, dir)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
-	err = MergeSegments(dir, files, out)
+	err = MergeSegments(dir, out)
 	if err != nil {
 		fmt.Printf("Error merging segments: %s", err)
 		return
 	}
 }
 
-func MergeSegments(dir string, files []string, out string) error {
+func MergeSegments(dir string, out string) error {
 	outUpper := fmt.Sprintf("../%s", out)
 	cmd := exec.Command("ffmpeg", "-f", "concat", "-safe", "0", "-i", "segments.txt", "-y", "-c", "copy", outUpper)
 	cmd.Dir = dir
@@ -113,39 +115,66 @@ func PickMediaFromMaster(masterpl *m3u8.MasterPlaylist) (*m3u8.MediaPlaylist, er
 	}
 }
 
-func DownloadSegments(mediapl *m3u8.MediaPlaylist, dir string) ([]string, error) {
+type downloadTask struct {
+	source      string
+	destination string
+}
+
+func DownloadSegments(mediapl *m3u8.MediaPlaylist, dir string) error {
 	fmt.Printf("Found %d parts. Downloading...\n", mediapl.Count())
 
-	createdFiles := make([]string, 0)
-
-	f, err := os.Create(fmt.Sprintf("%s/segments.txt", dir))
+	segmentsFile, err := os.Create(fmt.Sprintf("%s/segments.txt", dir))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer f.Close()
+	defer segmentsFile.Close()
 
 	bar := pb.StartNew((int)(mediapl.Count()))
 
-	for i := uint(0); i < mediapl.Count(); i++ {
-		seg := mediapl.Segments[i]
-		// fmt.Printf("%d/%d Starting part\n", i+1, mediapl.Count())
-		fn := fmt.Sprintf("%04d.ts", i)
-		fileName := filepath.Join(".", dir, fn)
-		err := DownloadSegment(seg.URI, fileName)
-		if err != nil {
-			return nil, err
-		}
+	jobs := make(chan downloadTask, workersCount)
+	errors := make(chan error)
+	done := make(chan int, workersCount)
 
-		io.WriteString(f, fmt.Sprintf("file '%s'\n", fn))
+	for i := 0; i < workersCount; i++ {
+		go func() {
+			for w := range jobs {
+				err := DownloadSegment(w.source, w.destination)
+				if err != nil {
+					errors <- err
+				}
+				bar.Increment()
+			}
 
-		bar.Increment()
-		createdFiles = append(createdFiles, fileName)
-		// fmt.Printf("%d/%d Finished part\r\n", i+1, mediapl.Count())
+			done <- 1
+		}()
 	}
 
-	bar.Finish()
+	go func() {
+		for i := uint(0); i < mediapl.Count(); i++ {
+			seg := mediapl.Segments[i]
+			fileName := fmt.Sprintf("%04d.ts", i)
+			pathToFile := filepath.Join(".", dir, fileName)
 
-	return createdFiles, nil
+			io.WriteString(segmentsFile, fmt.Sprintf("file '%s'\n", fileName))
+
+			jobs <- downloadTask{source: seg.URI, destination: pathToFile}
+		}
+		close(jobs)
+	}()
+
+	finishedWorkers := 0
+	for {
+		select {
+		case err = <-errors:
+			return err
+		case <-done:
+			finishedWorkers++
+			if finishedWorkers == workersCount {
+				bar.Finish()
+				return nil
+			}
+		}
+	}
 }
 
 func DownloadSegment(url string, p string) error {
