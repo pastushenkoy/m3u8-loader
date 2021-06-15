@@ -30,7 +30,7 @@ func main() {
 		return
 	}
 
-	mediapl, err := GetMediaPlaylist(url)
+	mediapl, err := getMediaPlaylist(url)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -42,20 +42,20 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	err = DownloadSegments(mediapl, dir)
+	err = downloadSegments(mediapl, dir)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
-	err = MergeSegments(dir, out)
+	err = mergeSegments(dir, out)
 	if err != nil {
 		fmt.Printf("Error merging segments: %s", err)
 		return
 	}
 }
 
-func MergeSegments(dir string, out string) error {
+func mergeSegments(dir string, out string) error {
 	outUpper := fmt.Sprintf("../%s", out)
 	cmd := exec.Command("ffmpeg", "-f", "concat", "-safe", "0", "-i", "segments.txt", "-y", "-c", "copy", outUpper)
 	cmd.Dir = dir
@@ -67,7 +67,7 @@ func MergeSegments(dir string, out string) error {
 	return cmd.Run()
 }
 
-func GetMediaPlaylist(url string) (*m3u8.MediaPlaylist, error) {
+func getMediaPlaylist(url string) (*m3u8.MediaPlaylist, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -90,13 +90,13 @@ func GetMediaPlaylist(url string) (*m3u8.MediaPlaylist, error) {
 		return mediapl, nil
 	case m3u8.MASTER:
 		masterpl := p.(*m3u8.MasterPlaylist)
-		return PickMediaFromMaster(masterpl)
+		return pickMediaFromMaster(masterpl)
 	default:
 		return nil, fmt.Errorf("unknown playlist format: %+v", listType)
 	}
 }
 
-func PickMediaFromMaster(masterpl *m3u8.MasterPlaylist) (*m3u8.MediaPlaylist, error) {
+func pickMediaFromMaster(masterpl *m3u8.MasterPlaylist) (*m3u8.MediaPlaylist, error) {
 	fmt.Println("This is a master playlist:")
 	for i, v := range masterpl.Variants {
 		fmt.Printf("[%d] %s %s\n", i+1, v.Name, v.Resolution)
@@ -108,7 +108,7 @@ func PickMediaFromMaster(masterpl *m3u8.MasterPlaylist) (*m3u8.MediaPlaylist, er
 		number, err := strconv.Atoi(input)
 		if err == nil {
 			if number >= 1 && number <= len(masterpl.Variants) {
-				return GetMediaPlaylist(masterpl.Variants[number-1].URI)
+				return getMediaPlaylist(masterpl.Variants[number-1].URI)
 			}
 		}
 		fmt.Printf("Enter number from 1 to %d\n", len(masterpl.Variants))
@@ -120,7 +120,7 @@ type downloadTask struct {
 	destination string
 }
 
-func DownloadSegments(mediapl *m3u8.MediaPlaylist, dir string) error {
+func downloadSegments(mediapl *m3u8.MediaPlaylist, dir string) error {
 	fmt.Printf("Found %d parts. Downloading...\n", mediapl.Count())
 
 	segmentsFile, err := os.Create(fmt.Sprintf("%s/segments.txt", dir))
@@ -138,7 +138,7 @@ func DownloadSegments(mediapl *m3u8.MediaPlaylist, dir string) error {
 	for i := 0; i < workersCount; i++ {
 		go func() {
 			for w := range jobs {
-				err := DownloadSegment(w.source, w.destination)
+				err := downloadSegment(w.source, w.destination)
 				if err != nil {
 					errors <- err
 				}
@@ -177,7 +177,7 @@ func DownloadSegments(mediapl *m3u8.MediaPlaylist, dir string) error {
 	}
 }
 
-func DownloadSegment(url string, p string) error {
+func downloadSegment(url string, p string) error {
 	f, err := os.Create(p)
 	if err != nil {
 		return err
