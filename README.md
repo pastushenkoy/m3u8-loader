@@ -1,6 +1,6 @@
 # M3U8 loader
 
-This util downloads all .ts segments from specified URL and then joins them to one .mp4 file using ffmpeg.
+This util downloads all .ts segments from specified URL and then joins them in one .mp4 file using ffmpeg.
 
 ffmpeg is required for this downloader.
 
